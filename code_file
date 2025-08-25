@@ -1,0 +1,118 @@
+#include <Wire.h>
+#include <Servo.h>
+
+// GY-521 MPU6050 I2C address
+const int MPU6050_ADDRESS = 0x68;
+
+// MPU6050 register addresses
+const int ACCEL_XOUT_H = 0x3B;
+const int ACCEL_YOUT_H = 0x3D;
+const int ACCEL_ZOUT_H = 0x3F;
+const int GYRO_XOUT_H = 0x43;
+const int GYRO_YOUT_H = 0x45;
+const int GYRO_ZOUT_H = 0x47;
+const int PWR_MGMT_1 = 0x6B;
+
+// Servo motor setup
+const int SERVO_PIN = 9;
+Servo tiltServo;
+
+// Variables to store sensor data
+int16_t accelX, accelY, accelZ;
+
+// Only need X-axis tilt for spoon stabilization
+float tiltX;
+
+// Better filtering for stability
+float filteredTiltX = 0;
+const float FILTER_ALPHA = 0.95; // Higher for more stability
+
+void setup()
+{
+    Wire.begin();
+
+    // Initialize servo immediately
+    tiltServo.attach(SERVO_PIN);
+    tiltServo.write(90);
+
+    // Wake up MPU6050
+    Wire.beginTransmission(MPU6050_ADDRESS);
+    Wire.write(PWR_MGMT_1);
+    Wire.write(0);
+    Wire.endTransmission(true);
+
+    delay(100); // Minimal setup delay
+}
+
+void loop()
+{
+    // ULTRA-MINIMAL LOOP - Maximum speed
+    readMPU6050();
+    calculateTilt();
+    controlAntiTremorSpoon();
+    // No delays - run as fast as possible
+}
+
+void readMPU6050()
+{
+    // Only read accelerometer data (first 6 bytes) - skip gyro for speed
+    Wire.beginTransmission(MPU6050_ADDRESS);
+    Wire.write(ACCEL_XOUT_H);
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU6050_ADDRESS, 6, true);
+
+    // Read only accelerometer data
+    accelX = Wire.read() << 8 | Wire.read();
+    accelY = Wire.read() << 8 | Wire.read();
+    accelZ = Wire.read() << 8 | Wire.read();
+}
+
+void calculateTilt()
+{
+    // Ultra-fast tilt calculation - only X-axis
+    float accelX_g = accelX * 0.000061035; // Pre-calculated 1/16384.0
+    float accelY_g = accelY * 0.000061035;
+    float accelZ_g = accelZ * 0.000061035;
+
+    // Prevent divide-by-zero and invalid readings
+    if (abs(accelZ_g) < 0.01)
+        accelZ_g = 0.01; // Prevent gimbal lock
+
+    // Fast tilt calculation using atan2
+    float rawTiltX = atan2(accelY_g, accelZ_g) * 57.2958; // Pre-calculated 180/PI
+
+    // Limit extreme angles to prevent servo damage
+    rawTiltX = constrain(rawTiltX, -45, 45);
+
+    // Minimal filtering
+    filteredTiltX = (FILTER_ALPHA * rawTiltX) + ((1.0 - FILTER_ALPHA) * filteredTiltX);
+    tiltX = filteredTiltX;
+}
+
+// ALL COMPLEX FUNCTIONS REMOVED FOR MAXIMUM SPEED
+// Only kept: setup(), loop(), readMPU6050(), calculateTilt(), controlAntiTremorSpoon()
+
+void controlAntiTremorSpoon()
+{
+    // ANTI-JITTER servo control with timing delay
+    static float lastServoAngle = 90.0;
+    static unsigned long lastMoveTime = 0;
+
+    // Perfect 1:1 compensation
+    float servoAngle = 90.0 - tiltX;
+    servoAngle = constrain(servoAngle, 0.0, 180.0);
+
+    // Check if enough time has passed AND angle change is significant
+    unsigned long currentTime = millis();
+    if (abs(servoAngle - lastServoAngle) >= 3.0 &&
+        (currentTime - lastMoveTime) >= 500) // 500ms = half second delay
+    {
+        tiltServo.write((int)servoAngle);
+        lastServoAngle = servoAngle;
+        lastMoveTime = currentTime;
+    }
+}
+
+// By Aadil Noufal
+// available to use freely
+// Please give credit if you use this code if possible
